@@ -1,0 +1,118 @@
+using Newtonsoft.Json;
+using System.Text.RegularExpressions;
+using Google.Apis.Auth.OAuth2;
+
+class Program
+{
+    static async Task Main(string[] args)
+    {
+        await GenerateContentAsync();
+    }
+
+    static async Task GenerateContentAsync()
+    {
+        // Replace with your Google Cloud access token (from gcloud auth or service account)
+        string projectId = "vertexAi-id";
+        string location = "us-central1";
+        string model = "gemini-2.0-flash-001";
+        string endpoint = $"https://{location}-aiplatform.googleapis.com/v1/projects/{projectId}/locations/{location}/publishers/google/models/{model}:streamGenerateContent";
+
+        var credential = GoogleCredential
+            .FromFile("C:\\Users\\anils\\source\\repos\\VertexAI_Google\\googleAPIkey\\ocrai-selfbill-2030065e00a6.json")
+            .CreateScoped("https://www.googleapis.com/auth/cloud-platform");
+        string accessToken = credential.UnderlyingCredential.GetAccessTokenForRequestAsync().Result;
+        //Console.WriteLine(accessToken); // YOUR_ACCESS_TOKEN
+
+        using var httpClient = new HttpClient();
+        httpClient.DefaultRequestHeaders.Authorization = new System.Net.Http.Headers.AuthenticationHeaderValue("Bearer", accessToken);
+
+        string trainingLine = "Extract the invoice number (it may contain hyphens and it my be multiple invoice number i.e. 201152049, 201152050, 701-152047, 801-152048), amount, and currency. Example: Invoice Number: 201-152044, Currency: USD, Amount: 14664.6. Now find the invoice details in this text: ";
+
+        //Bank transaction like (From Database list)
+        //string bankLine = "XYZ CONSULTING LIMITED 96A COLERIDGE STREET HOVE BN3 5AA GB 201-151556 USD 0 11975.86";
+        string bankLine = "XYZ RESOURCES LTD. PENROSE QUAY CORK T23 XY28 IE 201152049,201152050,701-152047,801-152048 USD 0 13643.57";
+        
+        var requestBody = new
+        {
+            contents = new[]
+            { new
+            { role = "user",
+                parts = new[]
+                { new
+                {
+                    text = trainingLine + bankLine
+                }
+                } } },
+            generationConfig = new { temperature = 1, topP = 0.95, maxOutputTokens = 8192 }
+        };
+
+        var jsonContent = new StringContent(JsonConvert.SerializeObject(requestBody), System.Text.Encoding.UTF8, "application/json");
+
+        var response = await httpClient.PostAsync(endpoint, jsonContent);
+        response.EnsureSuccessStatusCode();
+
+        string responseText = await response.Content.ReadAsStringAsync();
+
+        // Deserialize and process the response
+        var responses = JsonConvert.DeserializeObject<List<Response>>(responseText);
+        string combinedText = "";
+
+        foreach (var resp in responses ?? new List<Response>())
+        {
+            foreach (var candidate in resp.Candidates ?? new List<Candidate>())
+            {
+                foreach (var part in candidate.Content?.Parts ?? new List<Part>())
+                {
+                    combinedText += part.Text; // Combine all text parts
+                }
+            }
+        }
+
+        Console.WriteLine($"combinedText: {combinedText}");
+        
+        // Remove '*' and '\n' before processing
+        combinedText = combinedText != null? combinedText.Replace("*", "").Replace("\n", " "): "";
+
+        // Extract Invoice Number, Amount, and Currency
+        string invoiceNumber = Regex.Match(combinedText, @"Invoice Numbers?:\s*([\d-,\s]+)", RegexOptions.IgnoreCase)?.Groups[1].Value.TrimEnd(',') ?? "";
+        string amount = Regex.Match(combinedText, @"Amount:\s*([\d.]+)", RegexOptions.IgnoreCase)?.Groups[1].Value ?? "";
+        string currency = Regex.Match(combinedText, @"Currency:\s*([A-Z]+)", RegexOptions.IgnoreCase)?.Groups[1].Value ?? "";
+
+        Console.WriteLine($"Invoice Number: {invoiceNumber}");
+        Console.WriteLine($"Amount: {amount}");
+        Console.WriteLine($"Currency: {currency}");
+
+        // Construct the desired JSON response
+        var result = new
+        {
+            response = $"invoice number: {invoiceNumber}, Amount: {amount}, currency: {currency}"
+        };
+
+        string jsonResult = JsonConvert.SerializeObject(result);
+        
+        Console.WriteLine(jsonResult); // Output: {"response":"invoice number: 201151752, Amount: 10500, currency: EUR"}
+    }
+}
+
+
+
+// Define response classes
+public class Response
+{
+    public List<Candidate> Candidates { get; set; }
+}
+
+public class Candidate
+{
+    public Content Content { get; set; }
+}
+
+public class Content
+{
+    public List<Part> Parts { get; set; }
+}
+
+public class Part
+{
+    public string Text { get; set; }
+}
